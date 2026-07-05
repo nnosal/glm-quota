@@ -45,19 +45,40 @@ claude plugin marketplace add nnosal/glm-quota
 claude plugin install glm-quota
 ```
 
-Then add this to your `~/.claude/settings.json`:
+The plugin's hooks (MCP coherence check, pause/resume guard) activate automatically once installed. The status line itself has to be wired up separately, since Claude Code has no environment-variable override for it — only `settings.json` or the CLI's `--settings` flag can set it.
+
+### Recommended: activate per-launch with `--settings`, not `settings.json`
+
+Rather than permanently adding `statusLine` to `~/.claude/settings.json` (which would apply it to every Claude Code session, everywhere), inject it only where you actually launch Claude Code — a shell function or a `mise`/task-runner wrapper — using the `--settings` CLI flag:
+
+```bash
+cc() {
+  if [ "${GLM_STATUS_LINE:-1}" = "1" ]; then
+    local status_cmd='bash "$(find ~/.claude/plugins/cache/nnosal-glm-quota -iname quota-statusline.sh 2>/dev/null | head -1)" --mode bar'
+    local settings_json
+    settings_json=$(jq -nc --arg cmd "$status_cmd" '{statusLine:{type:"command",command:$cmd,padding:0}}')
+    claude --settings "$settings_json" "$@"
+  else
+    claude "$@"
+  fi
+}
+```
+
+The `find` call resolves the plugin's cache path dynamically (it includes a version folder like `1.0.0` that changes on every update), so this never needs editing after a `claude plugin update`. Set `GLM_STATUS_LINE=0` to launch without the status line when needed. This same pattern works whether you're launching a native Claude session or a GLM one (e.g. inside a `mise` task that also sets `GLM_QUOTA_ACTIVE=1`).
+
+### Alternative: `settings.json`
+
+If you do want it globally, add this to `~/.claude/settings.json` instead:
 
 ```json
 {
   "statusLine": {
     "type": "command",
-    "command": "bash ${HOME}/.claude/plugins/cache/nnosal-glm-quota/glm-quota/1.0.0/scripts/quota-statusline.sh --mode bar",
+    "command": "bash \"$(find ~/.claude/plugins/cache/nnosal-glm-quota -iname quota-statusline.sh 2>/dev/null | head -1)\" --mode bar",
     "padding": 0
   }
 }
 ```
-
-> The cache path includes a version folder (e.g. `1.0.0`) and can vary. Run `find ~/.claude/plugins/cache/nnosal-glm-quota -iname quota-statusline.sh` after install to confirm the exact path.
 
 Restart Claude Code and you're good to go.
 
