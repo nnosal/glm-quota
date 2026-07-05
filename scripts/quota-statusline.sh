@@ -93,7 +93,11 @@ reset_mcp=""
 BASE_URL="${ANTHROPIC_BASE_URL:-}"
 AUTH_TOKEN="${ANTHROPIC_AUTH_TOKEN:-}"
 
-if [[ -n "$AUTH_TOKEN" && "$BASE_URL" =~ api\.z\.ai|bigmodel\.cn ]]; then
+# GLM_QUOTA_ACTIVE is the sole activation gate — set it only where you launch
+# Claude Code against Z.ai (e.g. in your mise/shell task's env block). This
+# avoids false positives from a stale ANTHROPIC_BASE_URL left over in the
+# shell environment from an unrelated session.
+if [[ "${GLM_QUOTA_ACTIVE:-}" == "1" && -n "$AUTH_TOKEN" && "$BASE_URL" =~ api\.z\.ai|bigmodel\.cn ]]; then
   proto="${BASE_URL%%://*}"
   host="${BASE_URL#*://}"
   host="${host%%/*}"

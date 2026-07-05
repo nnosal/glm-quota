@@ -30,6 +30,12 @@ PEAK_END_HOUR = 18
 
 
 def is_glm_mode():
+    # GLM_QUOTA_ACTIVE is the sole activation gate — set only where Claude Code
+    # is launched against Z.ai (e.g. the mise/shell task's env block). This
+    # avoids false positives from a stale ANTHROPIC_BASE_URL left over in the
+    # shell environment from an unrelated session.
+    if os.environ.get("GLM_QUOTA_ACTIVE") != "1":
+        return False
     base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
     return "api.z.ai" in base_url or "bigmodel.cn" in base_url
 

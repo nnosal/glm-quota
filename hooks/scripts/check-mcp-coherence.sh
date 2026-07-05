@@ -4,14 +4,19 @@
 
 SETTINGS="$HOME/.claude/settings.json"
 
-[[ ! -f "$SETTINGS" ]] && exit 0
-
-BASE_URL=$(grep -o '"ANTHROPIC_BASE_URL"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS" 2>/dev/null | head -1 | grep -o '"https\?://[^"]*"')
-
 ZAI_MPCS=("zai-mcp-server" "web-reader" "zread" "duckduckgo")
 
 is_glm=false
-[[ "$BASE_URL" =~ api\.z\.ai|bigmodel\.cn ]] && is_glm=true
+if [[ "${GLM_QUOTA_ACTIVE:-}" == "1" && "${ANTHROPIC_BASE_URL:-}" =~ api\.z\.ai|bigmodel\.cn ]]; then
+  # Session launched with the GLM activation flag set (e.g. via a mise/shell
+  # task's env block) — authoritative, no need to inspect settings.json.
+  is_glm=true
+elif [[ -f "$SETTINGS" ]]; then
+  # Fallback for setups that swap settings.json wholesale instead of using
+  # the env-var flag (e.g. settings.json_glm / settings.json_claude).
+  BASE_URL=$(grep -o '"ANTHROPIC_BASE_URL"[[:space:]]*:[[:space:]]*"[^"]*"' "$SETTINGS" 2>/dev/null | head -1 | grep -o '"https\?://[^"]*"')
+  [[ "$BASE_URL" =~ api\.z\.ai|bigmodel\.cn ]] && is_glm=true
+fi
 
 # Extract enabledMcpjsonServers as comma-separated list
 enabled=$(grep -A 100 '"enabledMcpjsonServers"' "$SETTINGS" 2>/dev/null | grep -o '"[^"]*"' | tr -d '"' | paste -sd ',' - 2>/dev/null)

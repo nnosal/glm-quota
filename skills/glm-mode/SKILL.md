@@ -9,13 +9,28 @@ Provide authoritative knowledge about GLM/Zai mode configuration in Claude Code,
 
 ## Mode Detection
 
-GLM mode is active when `settings.json` contains:
+GLM mode requires **both**:
 
-```json
-"ANTHROPIC_BASE_URL": "https://api.z.ai/api/anthropic"
+1. `GLM_QUOTA_ACTIVE=1` in the process environment — the sole activation gate.
+   Set this only where Claude Code is actually launched against Z.ai (e.g. a
+   dedicated mise/shell task's `env` block), never globally in a shell rc
+   file. `ANTHROPIC_BASE_URL` alone is not trusted for activation: it can
+   linger in a shell environment from an unrelated session and would
+   otherwise make a plain Claude/Anthropic session falsely report as GLM.
+2. `ANTHROPIC_BASE_URL` matching `*api.z.ai*` or `*bigmodel.cn*` — used to
+   pick the actual API host once GLM mode is confirmed active.
+
+Detection logic (all three plugin components — statusline, pause/resume
+decision script, MCP coherence hook — implement this the same way):
+
+```bash
+[[ "$GLM_QUOTA_ACTIVE" == "1" && "$ANTHROPIC_BASE_URL" =~ api\.z\.ai|bigmodel\.cn ]]
 ```
 
-Detection logic: check if the env var `ANTHROPIC_BASE_URL` matches `*api.z.ai*` or `*bigmodel.cn*`.
+The MCP coherence hook additionally falls back to grepping a static
+`ANTHROPIC_BASE_URL` out of `~/.claude/settings.json` for setups that swap
+`settings.json` wholesale (`settings.json_glm` / `settings.json_claude`)
+instead of using the env-var flag.
 
 ## Required MCP Servers (GLM mode only)
 
