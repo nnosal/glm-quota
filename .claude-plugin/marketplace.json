@@ -1,0 +1,14 @@
+{
+  "name": "nnosal-glm-quota",
+  "description": "Personal fork of glm-quota with automatic quota-aware pause/resume",
+  "owner": {
+    "name": "Nicolas Nosal"
+  },
+  "plugins": [
+    {
+      "name": "glm-quota",
+      "description": "Z.ai/GLM quota statusline, detailed quota skill, MCP coherence check, and automatic pause/resume around peak hours",
+      "source": "."
+    }
+  ]
+}
