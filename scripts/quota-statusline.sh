@@ -27,6 +27,13 @@ if [[ ! -t 0 ]]; then
     # Total tokens = input + output + cache read + cache creation
     ctx_tokens=$(echo "$input" | jq -r '(.context_window.total_input_tokens // 0) + (.context_window.total_output_tokens // 0) + (.context_window.current_usage.cache_read_input_tokens // 0) + (.context_window.current_usage.cache_creation_input_tokens // 0)' 2>/dev/null)
     model_name=$(echo "$input" | jq -r '.model.display_name // .model.id // empty' 2>/dev/null)
+    # Native Claude/Anthropic plan usage — same numbers as claude.ai's usage
+    # page, provided directly by Claude Code, no API call needed. Only
+    # populated when talking to Anthropic's own backend (absent in GLM mode).
+    native_5h=$(echo "$input" | jq -r '.rate_limits.five_hour.used_percentage // empty' 2>/dev/null)
+    native_5h_reset=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty' 2>/dev/null)
+    native_7d=$(echo "$input" | jq -r '.rate_limits.seven_day.used_percentage // empty' 2>/dev/null)
+    native_7d_reset=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // empty' 2>/dev/null)
   fi
 fi
 
@@ -35,6 +42,23 @@ fmt_reset() {
   local ms="${1%%.*}"
   [[ -z "$ms" || "$ms" == "null" ]] && return
   local s=$(( ms / 1000 ))
+  local now=$(date +%s)
+  local diff=$(( s - now ))
+  if (( diff <= 0 )); then
+    printf 'now'
+  elif (( diff < 3600 )); then
+    printf '%dm' $(( (diff + 59) / 60 ))
+  elif (( diff < 86400 )); then
+    printf '%dh' $(( (diff + 1800) / 3600 ))
+  else
+    printf '%dj' $(( (diff + 43200) / 86400 ))
+  fi
+}
+
+# --- Helper: format reset time (seconds epoch) → Xm / Xh / Xj ---
+fmt_reset_s() {
+  local s="${1%%.*}"
+  [[ -z "$s" || "$s" == "null" ]] && return
   local now=$(date +%s)
   local diff=$(( s - now ))
   if (( diff <= 0 )); then
@@ -186,7 +210,7 @@ if [[ -n "$ctx_real_pct" ]]; then
   fi
 fi
 
-# Line 2: Z.ai quota
+# Line 2: Z.ai quota (GLM mode) or native Claude plan usage (everywhere else)
 if [[ -n "$token_5h" ]]; then
   line2+="5h:$(render_bar "$token_5h")"
   if [[ -n "$reset_5h" ]]; then line2+=" ↻$(fmt_reset "$reset_5h")"; fi
@@ -199,6 +223,16 @@ if [[ -n "$mcp_pct" ]]; then
   [[ -n "$token_5h" || -n "$token_5h_2" ]] && line2+=" │ "
   line2+="MCP:${mcp_cur}/${mcp_max}"
   if [[ -n "$reset_mcp" ]]; then line2+=" ↻$(fmt_reset "$reset_mcp")"; fi
+elif [[ -n "$native_5h" || -n "$native_7d" ]]; then
+  if [[ -n "$native_5h" ]]; then
+    line2+="5h:$(render_bar "$native_5h")"
+    if [[ -n "$native_5h_reset" ]]; then line2+=" ↻$(fmt_reset_s "$native_5h_reset")"; fi
+  fi
+  if [[ -n "$native_7d" ]]; then
+    [[ -n "$native_5h" ]] && line2+=" │ "
+    line2+="7j:$(render_bar "$native_7d")"
+    if [[ -n "$native_7d_reset" ]]; then line2+=" ↻$(fmt_reset_s "$native_7d_reset")"; fi
+  fi
 fi
 
 printf '%b\n%b\n' "$line1" "$line2"

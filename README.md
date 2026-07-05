@@ -24,9 +24,9 @@ When you use Claude Code with Z.ai/GLM, you get rate-limited across token window
 
 **Line 1** — your current model, a visual bar of context usage, the token counter, and a `⚡ /compact` reminder that appears past 50%.
 
-**Line 2** — your Z.ai quota: 5-hour and 7-day token windows, MCP tool call usage, and how long until each window resets.
+**Line 2** — in GLM mode: your Z.ai quota (5-hour and 7-day token windows, MCP tool call usage, reset countdowns). Outside GLM mode: the same 5-hour/7-day rate limits Anthropic reports natively for your Claude plan (identical numbers to the claude.ai usage page) — no API calls needed, Claude Code already sends this data to every statusline script.
 
-The plugin activates automatically when you're in GLM mode and stays completely silent otherwise.
+GLM quota only ever shows when both `GLM_QUOTA_ACTIVE=1` is set in the environment (e.g. by the task/script that launches Claude Code against Z.ai) and `ANTHROPIC_BASE_URL` points at Z.ai — never based on a leftover `ANTHROPIC_BASE_URL` alone. Everywhere else, line 2 falls back to native Claude plan usage, or stays empty if neither is available.
 
 ## Automatic pause/resume around peak hours
 
