@@ -28,20 +28,21 @@ When you use Claude Code with Z.ai/GLM, you get rate-limited across token window
 
 The plugin activates automatically when you're in GLM mode and stays completely silent otherwise.
 
+## Automatic pause/resume around peak hours
+
+GLM peak hours (14:00–18:00 Beijing time) run at 3× quota consumption. This fork adds a guard that:
+
+- Watches your 5-hour and 7-day token windows via the same cached quota data as the statusline
+- Automatically pauses a running workflow before either window hits 95%
+- Prefers resuming outside peak hours when only the 5h window is tight; if the 7-day window itself is near its limit, it waits for the 7-day reset regardless of peak hours
+- Resumes on its own — no confirmation needed — by scheduling the next check at the right time
+
 ## Installation
 
-### Via Marketplace (recommandé)
+This fork bundles its own marketplace file, so it installs directly — no separate marketplace repo needed.
 
 ```bash
-claude plugin marketplace add https://github.com/MisterKarott/misterkarott-marketplace
-claude plugin install glm-quota
-```
-
-### Manuellement
-
-```bash
-git clone https://github.com/MisterKarott/glm-quota.git
-cd glm-quota
+claude plugin marketplace add nnosal/glm-quota
 claude plugin install glm-quota
 ```
 
@@ -51,13 +52,13 @@ Then add this to your `~/.claude/settings.json`:
 {
   "statusLine": {
     "type": "command",
-    "command": "bash ${HOME}/.claude/plugins/cache/github-misterkarott-glm-quota/glm-quota/scripts/quota-statusline.sh --mode bar",
+    "command": "bash ${HOME}/.claude/plugins/cache/nnosal-glm-quota/glm-quota/1.0.0/scripts/quota-statusline.sh --mode bar",
     "padding": 0
   }
 }
 ```
 
-> The cache path may vary. Run `ls ~/.claude/plugins/cache/ | grep glm-quota` after install to confirm.
+> The cache path includes a version folder (e.g. `1.0.0`) and can vary. Run `find ~/.claude/plugins/cache/nnosal-glm-quota -iname quota-statusline.sh` after install to confirm the exact path.
 
 Restart Claude Code and you're good to go.
 
