@@ -184,9 +184,9 @@ if [[ "${GLM_QUOTA_ACTIVE:-}" == "1" && -n "$AUTH_TOKEN" && "$BASE_URL" =~ api\.
   fi
 fi
 
-# --- Build output — 2 lines ---
+# --- Build output — single line ---
 line1="⟡"
-line2="  "
+line2=""
 
 # Compute real context percentage from actual token count (with cache)
 ctx_real_pct=""
@@ -235,4 +235,9 @@ elif [[ -n "$native_5h" || -n "$native_7d" ]]; then
   fi
 fi
 
-printf '%b\n%b\n' "$line1" "$line2"
+# Merge onto a single line — line2 stays empty when there's no quota data to show.
+if [[ -n "$line2" ]]; then
+  printf '%b │ %b\n' "$line1" "$line2"
+else
+  printf '%b\n' "$line1"
+fi
