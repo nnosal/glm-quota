@@ -147,6 +147,13 @@ if [[ -n "$AUTH_TOKEN" && "$BASE_URL" =~ api\.z\.ai|bigmodel\.cn ]]; then
       fi
     done
   fi
+
+  # Keep the pause/resume decision state fresh for the quota-guard hook.
+  # Runs in the background so it never adds latency to the statusline itself.
+  if command -v uv >/dev/null 2>&1; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    ( uv run "${SCRIPT_DIR}/glm_quota_decide.py" >/dev/null 2>&1 & )
+  fi
 fi
 
 # --- Build output — 2 lines ---

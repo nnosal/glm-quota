@@ -1,3 +1,4 @@
 .DS_Store
 *.local.md
 .orphaned_at
+__pycache__/
