@@ -23,9 +23,15 @@ When you use Claude Code with Z.ai/GLM, you get rate-limited across token window
 
 **Model + context** — your current model, a visual bar of context usage, the token counter, and a `⚡ /compact` reminder that appears past 50%. Always shown.
 
-**Quota** — in GLM mode: your Z.ai quota (5-hour and 7-day token windows, MCP tool call usage, reset countdowns). Outside GLM mode: the same 5-hour/7-day rate limits Anthropic reports natively for your Claude plan (identical numbers to the claude.ai usage page) — no API calls needed, Claude Code already sends this data to every statusline script. Appears only after your first message in a fresh session (Anthropic only populates it after the first API response).
+**Quota** — in GLM mode: your Z.ai quota (5-hour and 7-day token windows, MCP tool call usage, reset countdowns). Outside GLM mode: the same 5-hour/7-day rate limits Anthropic reports natively for your Claude plan (identical numbers to the claude.ai usage page) — no API calls needed, Claude Code already sends this data to every statusline script.
 
 GLM quota only ever shows when both `GLM_QUOTA_ACTIVE=1` is set in the environment (e.g. by the task/script that launches Claude Code against Z.ai) and `ANTHROPIC_BASE_URL` points at Z.ai — never based on a leftover `ANTHROPIC_BASE_URL` alone. Everywhere else, the quota segment falls back to native Claude plan usage, or is omitted entirely if neither is available.
+
+### Native quota on a fresh session (macOS only)
+
+Anthropic only populates the native `rate_limits` field in Claude Code's own statusline data *after* the first API response of a session — before that, the quota segment would normally stay blank. As a best-effort fallback, on macOS, the statusline reads your Claude Code OAuth token directly from the Keychain (`security find-generic-password -s "Claude Code-credentials"`) and queries `https://api.anthropic.com/api/oauth/usage` — the same undocumented internal endpoint claude.ai's own usage page uses — so the quota shows immediately, even before your first message.
+
+This is best-effort by design: it's skipped entirely once the native `rate_limits` field is available in Claude Code's own stdin JSON (no redundant network call), it never persists the token to disk, and any failure (non-macOS, Keychain locked, endpoint change) silently falls back to the existing blank-until-first-message behavior. Since it relies on an undocumented API, it could break on Anthropic's end without notice.
 
 ## Automatic pause/resume around peak hours
 
