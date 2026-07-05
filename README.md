@@ -33,14 +33,12 @@ Anthropic only populates the native `rate_limits` field in Claude Code's own sta
 
 This is best-effort by design: it's skipped entirely once the native `rate_limits` field is available in Claude Code's own stdin JSON (no redundant network call), it never persists the token to disk, and any failure (non-macOS, Keychain locked, endpoint change) silently falls back to the existing blank-until-first-message behavior. Since it relies on an undocumented API, it could break on Anthropic's end without notice.
 
-## Automatic pause/resume around peak hours
+## Automatic pause/resume — GLM and native Claude
 
-GLM peak hours (14:00–18:00 Beijing time) run at 3× quota consumption. This fork adds a guard that:
+This fork adds a guard that watches your 5-hour and 7-day usage and automatically pauses a running workflow before either window hits 95%, resuming on its own — no confirmation needed. It works in **both** GLM and plain Claude/Anthropic sessions:
 
-- Watches your 5-hour and 7-day token windows via the same cached quota data as the statusline
-- Automatically pauses a running workflow before either window hits 95%
-- Prefers resuming outside peak hours when only the 5h window is tight; if the 7-day window itself is near its limit, it waits for the 7-day reset regardless of peak hours
-- Resumes on its own — no confirmation needed — by scheduling the next check at the right time
+- **GLM**: peak hours (14:00–18:00 Beijing time) run at 3× quota consumption, so when only the 5h window is tight, it prefers resuming outside that window. If the 7-day window itself is near its limit, it waits for the 7-day reset regardless of peak hours.
+- **Native Claude**: same 95% thresholds and 7-day-takes-priority rule, but no peak-hour concept — Anthropic doesn't have a time-of-day multiplier, so it just resumes when the window resets.
 
 ## Installation
 

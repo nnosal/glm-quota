@@ -21,6 +21,7 @@ except ImportError:
 
 CACHE_DIR = "/tmp/.glm-quota-cache"
 QUOTA_CACHE_FILE = os.path.join(CACHE_DIR, "quota.json")
+NATIVE_QUOTA_CACHE_FILE = os.path.join(CACHE_DIR, "claude-native-quota.json")
 STATE_FILE = os.path.join(CACHE_DIR, "pause-state.json")
 
 PAUSE_THRESHOLD = 95.0
@@ -43,6 +44,14 @@ def is_glm_mode():
 def load_quota_cache():
     try:
         with open(QUOTA_CACHE_FILE) as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def load_native_quota_cache():
+    try:
+        with open(NATIVE_QUOTA_CACHE_FILE) as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return None
@@ -78,6 +87,15 @@ def parse_reset_time(ms_epoch):
         return None
     try:
         return datetime.fromtimestamp(float(ms_epoch) / 1000.0, tz=timezone.utc)
+    except (ValueError, OSError):
+        return None
+
+
+def parse_reset_time_s(s_epoch):
+    if not s_epoch:
+        return None
+    try:
+        return datetime.fromtimestamp(float(s_epoch), tz=timezone.utc)
     except (ValueError, OSError):
         return None
 
@@ -122,18 +140,9 @@ def write_state(decision, reason, resume_at_utc, now_utc):
     return state
 
 
-def decide(now_utc=None):
-    now_utc = now_utc or datetime.now(timezone.utc)
-
-    if not is_glm_mode():
-        return write_state("CONTINUE", "Not in GLM mode", None, now_utc)
-
-    data = load_quota_cache()
-    if data is None:
-        return write_state("CONTINUE", "No quota data cached yet", None, now_utc)
-
-    pct_5h, reset_5h, pct_7d, reset_7d = extract_limits(data)
-
+def decide_from_limits(pct_5h, reset_5h, pct_7d, reset_7d, now_utc, avoid_peak):
+    """Shared threshold logic for both GLM (peak-hour aware) and native
+    Claude (flat, no peak-hour concept) quota windows."""
     if pct_7d is not None and pct_7d >= PAUSE_THRESHOLD:
         resume_at = reset_7d or (now_utc + timedelta(days=1))
         reason = (
@@ -144,11 +153,15 @@ def decide(now_utc=None):
 
     if pct_5h is not None and pct_5h >= PAUSE_THRESHOLD:
         candidate = reset_5h or (now_utc + timedelta(hours=5))
-        resume_at = next_off_peak_start(candidate)
+        if avoid_peak:
+            resume_at = next_off_peak_start(candidate)
+            peak_note = " and we're outside GLM peak hours (14:00-18:00 Beijing time)"
+        else:
+            resume_at = candidate
+            peak_note = ""
         reason = (
             f"5h window at {pct_5h:.0f}% (>= {PAUSE_THRESHOLD:.0f}%). "
-            "Pausing until the 5h window resets and we're outside GLM peak hours "
-            "(14:00-18:00 Beijing time)."
+            f"Pausing until the 5h window resets{peak_note}."
         )
         return write_state("PAUSE", reason, resume_at, now_utc)
 
@@ -159,6 +172,29 @@ def decide(now_utc=None):
         None,
         now_utc,
     )
+
+
+def decide(now_utc=None):
+    now_utc = now_utc or datetime.now(timezone.utc)
+
+    if is_glm_mode():
+        data = load_quota_cache()
+        if data is None:
+            return write_state("CONTINUE", "No quota data cached yet", None, now_utc)
+        pct_5h, reset_5h, pct_7d, reset_7d = extract_limits(data)
+        return decide_from_limits(pct_5h, reset_5h, pct_7d, reset_7d, now_utc, avoid_peak=True)
+
+    # Native Claude/Anthropic session (not GLM): same thresholds, no
+    # peak-hour concept since Anthropic doesn't have a time-of-day multiplier.
+    native = load_native_quota_cache()
+    if native is None:
+        return write_state("CONTINUE", "No native quota data cached yet", None, now_utc)
+
+    pct_5h = native.get("five_hour_pct")
+    pct_7d = native.get("seven_day_pct")
+    reset_5h = parse_reset_time_s(native.get("five_hour_reset_epoch"))
+    reset_7d = parse_reset_time_s(native.get("seven_day_reset_epoch"))
+    return decide_from_limits(pct_5h, reset_5h, pct_7d, reset_7d, now_utc, avoid_peak=False)
 
 
 def main():

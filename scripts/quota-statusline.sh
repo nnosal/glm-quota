@@ -91,6 +91,24 @@ if [[ -z "${GLM_QUOTA_ACTIVE:-}" && -z "$native_5h" && -z "$native_7d" ]] && com
   fi
 fi
 
+# Feed the native quota (from either source above) to the pause/resume
+# decision script — same threshold logic as GLM, just without the
+# peak-hour concept. Only relevant outside GLM mode, since decide.py checks
+# GLM state first and ignores this file whenever GLM_QUOTA_ACTIVE=1.
+if [[ -z "${GLM_QUOTA_ACTIVE:-}" && ( -n "$native_5h" || -n "$native_7d" ) ]]; then
+  NATIVE_STATE_DIR="/tmp/.glm-quota-cache"
+  mkdir -p "$NATIVE_STATE_DIR" 2>/dev/null
+  jq -n \
+    --arg h "${native_5h:-null}" --arg hr "${native_5h_reset:-null}" \
+    --arg d "${native_7d:-null}" --arg dr "${native_7d_reset:-null}" \
+    '{
+      five_hour_pct: ($h | if . == "null" then null else tonumber end),
+      five_hour_reset_epoch: ($hr | if . == "null" then null else tonumber end),
+      seven_day_pct: ($d | if . == "null" then null else tonumber end),
+      seven_day_reset_epoch: ($dr | if . == "null" then null else tonumber end)
+    }' > "${NATIVE_STATE_DIR}/claude-native-quota.json" 2>/dev/null
+fi
+
 # --- Helper: format reset time (ms epoch) → Xm / Xh / Xj ---
 fmt_reset() {
   local ms="${1%%.*}"
@@ -230,12 +248,14 @@ if [[ "${GLM_QUOTA_ACTIVE:-}" == "1" && -n "$AUTH_TOKEN" && "$BASE_URL" =~ api\.
     done
   fi
 
-  # Keep the pause/resume decision state fresh for the quota-guard hook.
-  # Runs in the background so it never adds latency to the statusline itself.
-  if command -v uv >/dev/null 2>&1; then
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    ( uv run "${SCRIPT_DIR}/glm_quota_decide.py" >/dev/null 2>&1 & )
-  fi
+fi
+
+# Keep the pause/resume decision state fresh for the quota-guard hook, in
+# both GLM and native Claude sessions. Runs in the background so it never
+# adds latency to the statusline itself.
+if command -v uv >/dev/null 2>&1; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  ( uv run "${SCRIPT_DIR}/glm_quota_decide.py" >/dev/null 2>&1 & )
 fi
 
 # --- Build output — single line ---
