@@ -54,9 +54,13 @@ Rather than permanently adding `statusLine` to `~/.claude/settings.json` (which 
 ```bash
 cc() {
   if [ "${GLM_STATUS_LINE:-1}" = "1" ]; then
-    local status_cmd='bash "$(find ~/.claude/plugins/cache/nnosal-glm-quota -iname quota-statusline.sh 2>/dev/null | head -1)" --mode bar'
-    local settings_json
-    settings_json=$(jq -nc --arg cmd "$status_cmd" '{statusLine:{type:"command",command:$cmd,padding:0}}')
+    local plugin_root
+    plugin_root=$(jq -r '.plugins["glm-quota@nnosal-glm-quota"][0].installPath // empty' ~/.claude/plugins/installed_plugins.json 2>/dev/null)
+    local settings_json='{}'
+    if [ -n "$plugin_root" ]; then
+      local status_cmd="bash \"${plugin_root}/scripts/quota-statusline.sh\" --mode bar"
+      settings_json=$(jq -nc --arg cmd "$status_cmd" '{statusLine:{type:"command",command:$cmd,padding:0}}')
+    fi
     claude --settings "$settings_json" "$@"
   else
     claude "$@"
@@ -64,7 +68,7 @@ cc() {
 }
 ```
 
-The `find` call resolves the plugin's cache path dynamically (it includes a version folder like `1.0.0` that changes on every update), so this never needs editing after a `claude plugin update`. Set `GLM_STATUS_LINE=0` to launch without the status line when needed. This same pattern works whether you're launching a native Claude session or a GLM one (e.g. inside a `mise` task that also sets `GLM_QUOTA_ACTIVE=1`).
+The plugin's cache directory accumulates one folder per version/commit it's ever been updated to (`1.0.0`, `<sha>`, ...) — a `find -iname quota-statusline.sh | head -1` over that directory can silently resolve to a stale one, since directory traversal order isn't chronological. Reading `installPath` out of `~/.claude/plugins/installed_plugins.json` instead always resolves to whatever `claude plugin update` most recently pinned, with no risk of picking a stale cached copy. Set `GLM_STATUS_LINE=0` to launch without the status line when needed. This same pattern works whether you're launching a native Claude session or a GLM one (e.g. inside a `mise` task that also sets `GLM_QUOTA_ACTIVE=1`).
 
 ### Alternative: `settings.json`
 
@@ -74,7 +78,7 @@ If you do want it globally, add this to `~/.claude/settings.json` instead:
 {
   "statusLine": {
     "type": "command",
-    "command": "bash \"$(find ~/.claude/plugins/cache/nnosal-glm-quota -iname quota-statusline.sh 2>/dev/null | head -1)\" --mode bar",
+    "command": "bash \"$(jq -r '.plugins[\"glm-quota@nnosal-glm-quota\"][0].installPath' ~/.claude/plugins/installed_plugins.json)/scripts/quota-statusline.sh\" --mode bar",
     "padding": 0
   }
 }
