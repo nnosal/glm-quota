@@ -1,7 +1,7 @@
 #!/bin/bash
 # Statusline script for GLM mode — displays context + Z.ai quota
-# Uses a 5-minute cache to avoid API spam
-# Reads JSON from stdin (Claude Code statusLine)
+# Fetch/cache/decide logic lives in glm_quota_refresh.sh (shared with the
+# quota-guard hook); this script only parses stdin and renders output.
 
 MODE="bar"
 while [[ $# -gt 0 ]]; do
@@ -11,13 +11,19 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+CACHE_DIR="/tmp/.glm-quota-cache"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # --- Parse stdin from Claude Code ---
 input=""
 ctx_pct=""
 ctx_tokens=""
 ctx_total=""
 model_name=""
-cost_usd=""
+native_5h=""
+native_5h_reset=""
+native_7d=""
+native_7d_reset=""
 
 if [[ ! -t 0 ]]; then
   input=$(cat 2>/dev/null || true)
@@ -37,67 +43,10 @@ if [[ ! -t 0 ]]; then
   fi
 fi
 
-# --- Helper: ISO8601 UTC timestamp → epoch seconds (portable GNU/BSD date) ---
-iso_to_epoch() {
-  local clean="${1%%.*}"
-  [[ -z "$clean" ]] && return
-  date -u -d "$clean" +%s 2>/dev/null || date -j -u -f "%Y-%m-%dT%H:%M:%S" "$clean" +%s 2>/dev/null
-}
-
-# --- Init-only fallback: Claude Code only populates rate_limits in its own
-# stdin JSON after the first API response of the session. Before that, query
-# the same internal endpoint claude.ai itself uses, so the quota line isn't
-# blank on a fresh session. Best-effort: macOS Keychain only, never persists
-# the token, silently gives up on any failure (unofficial, undocumented API).
-if [[ -z "${GLM_QUOTA_ACTIVE:-}" && -z "$native_5h" && -z "$native_7d" ]] && command -v security >/dev/null 2>&1; then
-  NATIVE_CACHE_DIR="/tmp/.glm-quota-cache"
-  NATIVE_CACHE_FILE="${NATIVE_CACHE_DIR}/claude-oauth-usage.json"
-  mkdir -p "$NATIVE_CACHE_DIR" 2>/dev/null
-
-  native_cache_age=999999
-  if [[ -f "$NATIVE_CACHE_FILE" ]]; then
-    native_cache_ts=$(stat -f %m "$NATIVE_CACHE_FILE" 2>/dev/null || stat -c %Y "$NATIVE_CACHE_FILE" 2>/dev/null || echo 0)
-    native_cache_age=$(( $(date +%s) - native_cache_ts ))
-  fi
-
-  native_data=""
-  if (( native_cache_age < 120 )) && [[ -f "$NATIVE_CACHE_FILE" ]]; then
-    native_data=$(cat "$NATIVE_CACHE_FILE" 2>/dev/null)
-  else
-    oauth_token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null | jq -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
-    if [[ -n "$oauth_token" ]]; then
-      native_data=$(curl -s --max-time 5 \
-        -H "Authorization: Bearer ${oauth_token}" \
-        -H "anthropic-beta: oauth-2025-04-20" \
-        -H "Accept: application/json" \
-        -H "Content-Type: application/json" \
-        "https://api.anthropic.com/api/oauth/usage" 2>/dev/null)
-      oauth_token=""
-      if [[ -n "$native_data" ]] && echo "$native_data" | jq -e '.five_hour // .seven_day' >/dev/null 2>&1; then
-        echo "$native_data" > "$NATIVE_CACHE_FILE"
-      else
-        native_data=""
-      fi
-    fi
-  fi
-
-  if [[ -n "$native_data" ]]; then
-    native_5h=$(echo "$native_data" | jq -r '.five_hour.utilization // empty' 2>/dev/null)
-    native_5h_iso=$(echo "$native_data" | jq -r '.five_hour.resets_at // empty' 2>/dev/null)
-    native_7d=$(echo "$native_data" | jq -r '.seven_day.utilization // empty' 2>/dev/null)
-    native_7d_iso=$(echo "$native_data" | jq -r '.seven_day.resets_at // empty' 2>/dev/null)
-    [[ -n "$native_5h_iso" ]] && native_5h_reset=$(iso_to_epoch "$native_5h_iso")
-    [[ -n "$native_7d_iso" ]] && native_7d_reset=$(iso_to_epoch "$native_7d_iso")
-  fi
-fi
-
-# Feed the native quota (from either source above) to the pause/resume
-# decision script — same threshold logic as GLM, just without the
-# peak-hour concept. Only relevant outside GLM mode, since decide.py checks
-# GLM state first and ignores this file whenever GLM_QUOTA_ACTIVE=1.
-if [[ -z "${GLM_QUOTA_ACTIVE:-}" && ( -n "$native_5h" || -n "$native_7d" ) ]]; then
-  NATIVE_STATE_DIR="/tmp/.glm-quota-cache"
-  mkdir -p "$NATIVE_STATE_DIR" 2>/dev/null
+if [[ -z "${GLM_QUOTA_ACTIVE:-}" && -n "$native_5h" ]]; then
+  # Claude Code already gave us native usage for free — persist it for the
+  # pause/resume decision script instead of re-fetching via Keychain.
+  mkdir -p "$CACHE_DIR" 2>/dev/null
   jq -n \
     --arg h "${native_5h:-null}" --arg hr "${native_5h_reset:-null}" \
     --arg d "${native_7d:-null}" --arg dr "${native_7d_reset:-null}" \
@@ -106,8 +55,13 @@ if [[ -z "${GLM_QUOTA_ACTIVE:-}" && ( -n "$native_5h" || -n "$native_7d" ) ]]; t
       five_hour_reset_epoch: ($hr | if . == "null" then null else tonumber end),
       seven_day_pct: ($d | if . == "null" then null else tonumber end),
       seven_day_reset_epoch: ($dr | if . == "null" then null else tonumber end)
-    }' > "${NATIVE_STATE_DIR}/claude-native-quota.json" 2>/dev/null
+    }' > "${CACHE_DIR}/claude-native-quota.json" 2>/dev/null
 fi
+
+# Fetch (or reuse cached) quota + refresh the pause/resume decision state.
+# Same script the quota-guard hook triggers, so there's a single fetch/cache
+# implementation for both display and pause/resume.
+bash "${SCRIPT_DIR}/glm_quota_refresh.sh"
 
 # --- Helper: format reset time (ms epoch) → Xm / Xh / Xj ---
 fmt_reset() {
@@ -176,7 +130,7 @@ render_bar() {
   printf "${color}%s %s%%${reset}" "$bar" "$fmt_pct"
 }
 
-# --- Fetch Z.ai quota ---
+# --- Read cached quota for display ---
 token_5h=""
 token_5h_2=""
 mcp_pct=""
@@ -186,44 +140,8 @@ reset_5h=""
 reset_7d=""
 reset_mcp=""
 
-BASE_URL="${ANTHROPIC_BASE_URL:-}"
-AUTH_TOKEN="${ANTHROPIC_AUTH_TOKEN:-}"
-
-# GLM_QUOTA_ACTIVE is the sole activation gate — set it only where you launch
-# Claude Code against Z.ai (e.g. in your mise/shell task's env block). This
-# avoids false positives from a stale ANTHROPIC_BASE_URL left over in the
-# shell environment from an unrelated session.
-if [[ "${GLM_QUOTA_ACTIVE:-}" == "1" && -n "$AUTH_TOKEN" && "$BASE_URL" =~ api\.z\.ai|bigmodel\.cn ]]; then
-  proto="${BASE_URL%%://*}"
-  host="${BASE_URL#*://}"
-  host="${host%%/*}"
-  BASE="https://${host}"
-
-  CACHE_DIR="/tmp/.glm-quota-cache"
-  CACHE_FILE="${CACHE_DIR}/quota.json"
-  mkdir -p "$CACHE_DIR" 2>/dev/null
-
-  now_s=$(date +%s)
-  cache_age=999999
-  if [[ -f "$CACHE_FILE" ]]; then
-    cache_ts=$(stat -f %m "$CACHE_FILE" 2>/dev/null || stat -c %Y "$CACHE_FILE" 2>/dev/null || echo 0)
-    cache_age=$(( now_s - cache_ts ))
-  fi
-
-  data=""
-  if (( cache_age < 300 )) && [[ -f "$CACHE_FILE" ]]; then
-    data=$(cat "$CACHE_FILE")
-  else
-    data=$(curl -s --max-time 8 \
-      -H "Authorization: ${AUTH_TOKEN}" \
-      -H "Accept-Language: en-US" \
-      -H "Content-Type: application/json" \
-      "${BASE}/api/monitor/usage/quota/limit" 2>/dev/null)
-    if [[ $? -eq 0 && -n "$data" ]]; then
-      echo "$data" > "$CACHE_FILE"
-    fi
-  fi
-
+if [[ "${GLM_QUOTA_ACTIVE:-}" == "1" ]]; then
+  data=$(cat "${CACHE_DIR}/quota.json" 2>/dev/null)
   if [[ -n "$data" ]]; then
     limit_count=$(echo "$data" | jq '.data.limits | length' 2>/dev/null)
     for (( i=0; i<limit_count; i++ )); do
@@ -247,15 +165,16 @@ if [[ "${GLM_QUOTA_ACTIVE:-}" == "1" && -n "$AUTH_TOKEN" && "$BASE_URL" =~ api\.
       fi
     done
   fi
-
-fi
-
-# Keep the pause/resume decision state fresh for the quota-guard hook, in
-# both GLM and native Claude sessions. Runs in the background so it never
-# adds latency to the statusline itself.
-if command -v uv >/dev/null 2>&1; then
-  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  ( uv run "${SCRIPT_DIR}/glm_quota_decide.py" >/dev/null 2>&1 & )
+elif [[ -z "$native_5h" && -z "$native_7d" ]]; then
+  # stdin didn't give us native usage (fresh session) — glm_quota_refresh.sh
+  # just populated claude-native-quota.json via the Keychain fallback.
+  native_cache=$(cat "${CACHE_DIR}/claude-native-quota.json" 2>/dev/null)
+  if [[ -n "$native_cache" ]]; then
+    native_5h=$(echo "$native_cache" | jq -r '.five_hour_pct // empty' 2>/dev/null)
+    native_5h_reset=$(echo "$native_cache" | jq -r '.five_hour_reset_epoch // empty' 2>/dev/null)
+    native_7d=$(echo "$native_cache" | jq -r '.seven_day_pct // empty' 2>/dev/null)
+    native_7d_reset=$(echo "$native_cache" | jq -r '.seven_day_reset_epoch // empty' 2>/dev/null)
+  fi
 fi
 
 # --- Build output — single line ---

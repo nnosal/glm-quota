@@ -76,9 +76,9 @@ window resets."
 
 ### How it works
 
-1. `scripts/glm_quota_decide.py` runs after every statusline refresh
-   (piggybacked in `scripts/quota-statusline.sh`, no extra network calls)
-   and writes `/tmp/.glm-quota-cache/pause-state.json` with one of:
+1. `scripts/glm_quota_decide.py` reads the cached quota (Z.ai `quota.json`
+   in GLM mode, or `claude-native-quota.json` outside it) and writes
+   `/tmp/.glm-quota-cache/pause-state.json` with one of:
    - `CONTINUE` — under budget, proceed normally
    - `PAUSE` — the 5h window is at ≥95%; resume once it resets (GLM mode
      additionally waits until we're outside the 14:00–18:00 Beijing peak
@@ -86,15 +86,28 @@ window resets."
    - `STOP` — the 7-day window is at ≥95% (takes priority over the 5h
      state); resume only at the 7-day reset time, no matter what the 5h
      window says
-2. In GLM mode, the source is the cached Z.ai quota response
-   (`quota.json`). Outside GLM mode, it's the native Claude 5h/7d usage —
-   from Claude Code's own `rate_limits` stdin field once populated, or the
-   Keychain-based fallback for a fresh session — cached by the statusline
-   script into `claude-native-quota.json` for the decision script to read.
-3. The `PreToolUse` hook `hooks/scripts/quota-guard.sh` reads only that
-   cached file (no network call, fails open if missing/stale) and, when the
-   state is `PAUSE` or `STOP`, denies the `Bash`/`Task` call with a
-   `systemMessage` containing `resume_at_local` and `resume_in_seconds`.
+2. `scripts/glm_quota_refresh.sh` is what actually keeps the underlying
+   quota data current: fetches Z.ai in GLM mode or the Keychain-based
+   native fallback otherwise (each respecting its own TTL — 300s/120s —
+   so this never spams the API), then runs `glm_quota_decide.py`. This
+   script is shared and triggered from **two** places:
+   - `scripts/quota-statusline.sh`, for display, on Claude Code's own
+     refresh cadence (new message, `/compact`, etc.)
+   - `hooks/scripts/quota-guard.sh` itself, on every `Bash`/`Task` call —
+     **decoupling freshness from the statusline**. A long autonomous
+     workflow can leave the statusline quiet for minutes while still
+     hammering tool calls, which used to mean pause-state.json went stale
+     exactly when it mattered most. The hook now self-triggers a refresh,
+     throttled to once per 60s (`refresh-trigger.marker`) regardless of
+     how many tool calls fire in between — so no per-call process spawn,
+     and no extra network calls beyond what the TTLs above already allow.
+3. The `PreToolUse` hook `hooks/scripts/quota-guard.sh` reads the cached
+   `pause-state.json` for its own allow/deny decision (no network call in
+   that path, fails open if missing/stale) and, when the state is `PAUSE`
+   or `STOP`, denies the call with a `systemMessage` containing
+   `resume_at_local` and `resume_in_seconds`. Note: the refresh triggered
+   by *this* call is fire-and-forget — it won't affect the current call's
+   own decision, only the next one's.
 
 ### What the agent must do when denied
 
@@ -109,3 +122,16 @@ When a tool call is denied by this guard:
 4. No manual checkpoint is needed: the conversation state is already
    preserved; `ScheduleWakeup` simply re-enters the turn later, at which point
    the guard hook re-checks quota and either allows the call or denies again.
+
+### Known limitations
+
+- The `PreToolUse` matcher is `Bash|Task` — it does not match a top-level
+  `Workflow` tool call directly, only the `Bash`/`Task` calls nested inside
+  it. A workflow that crashes on a hard `429` before any of those nested
+  calls got denied won't have had a chance to call `ScheduleWakeup` — the
+  guard can only prevent *future* calls, not undo a rejection that already
+  happened at the model-inference layer, which no hook type can intercept.
+- If a session's process exits entirely (crash, hard `429`), nothing calls
+  `ScheduleWakeup` for it — there's no live agent left to make that call.
+  Resuming an interrupted session/workflow after that point is manual
+  (`--resume`, then `Workflow({scriptPath, resumeFromRunId})`).
